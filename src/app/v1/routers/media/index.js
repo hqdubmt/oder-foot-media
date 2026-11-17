@@ -11,4 +11,5 @@ router.get('/', asyncHandler(MediaControllers.list));
 router.get('/:id', asyncHandler(MediaControllers.getById));
 router.delete('/:id', asyncHandler(MediaControllers.delete));
 
+
 module.exports = router;

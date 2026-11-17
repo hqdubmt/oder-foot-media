@@ -1,139 +1,252 @@
+
+'use strict';
+
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+
 const MinioStorage = require('../../../configs/minio.config');
+const Media = require('../models/media.models');
 
 class MediaServices {
+
+  // ========================================
+  // 1. SANITIZE FILE NAME
+  // ========================================
+
   static sanitizeFileName(fileName = 'media-file') {
     const base = path.basename(fileName || 'media-file');
-    return base.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9._-]/g, '');
+
+    return base
+      .normalize('NFKC')
+      .replace(/\s+/g, '-')
+      .replace(/[^a-zA-Z0-9._-]/g, '') || 'media-file';
   }
 
-  async createMedia(fileData = {}) {
-    const file = fileData || {};
-    return {
-      id: file.id || `media-${Date.now()}`,
-      name: file.name || file.originalname || 'media-file',
-      originalName: file.originalname || file.name || 'media-file',
-      mimeType: file.mimetype || 'application/octet-stream',
-      size: Number(file.size) || 0,
-      path: file.path || '',
-      url: file.url || '',
-      bucket: file.bucket || MinioStorage.constants.DEFAULT_BUCKET,
-      folder: file.folder || 'uploads',
-      createdAt: file.createdAt || new Date().toISOString()
-    };
+  // ========================================
+  // 2. CREATE MEDIA MODEL
+  // ========================================
+
+  createMedia(fileData = {}) {
+    return Media.fromFile(fileData);
   }
+
+  // ========================================
+  // 3. UPLOAD SINGLE FILE
+  // ========================================
 
   async uploadSingle(file, options = {}) {
-    const {
-      bucketName = MinioStorage.constants.DEFAULT_BUCKET,
-      folder = 'uploads',
-      objectName,
-      metadata = {}
-    } = options;
-
     if (!file) {
       throw new Error('No file uploaded');
     }
 
+    const {
+      bucketName = MinioStorage.constants.DEFAULT_BUCKET,
+      folder = 'uploads',
+      objectName,
+      metadata = {},
+      uploadedBy = null
+    } = options;
+
     const fileName = file.originalname || file.filename || 'media-file';
+
     const safeName = MediaServices.sanitizeFileName(fileName);
-    const finalObjectName = objectName || `${folder}/${Date.now()}-${safeName}`;
 
-    const fileBuffer = fs.readFileSync(file.path);
-    const uploadResult = await MinioStorage.uploadBuffer({
-      bucketName,
-      objectName: finalObjectName,
-      fileBuffer,
-      contentType: file.mimetype || 'application/octet-stream',
-      metadata: {
-        'x-amz-meta-original-name': file.originalname || safeName,
-        'x-amz-meta-source': 'multer',
-        ...metadata
+    const cleanFolder = String(folder || 'uploads')
+      .replace(/^\/+|\/+$/g, '');
+
+    const finalObjectName = objectName ||
+      MinioStorage.normalizeObjectName(cleanFolder, safeName);
+
+    let fileBuffer;
+
+    try {
+      // Read uploaded file
+      if (file.buffer && Buffer.isBuffer(file.buffer)) {
+        fileBuffer = file.buffer;
+      } else if (file.path) {
+        fileBuffer = await fs.promises.readFile(file.path);
+      } else {
+        throw new Error('File buffer or file path is required');
       }
-    });
 
-    if (file.path && fs.existsSync(file.path)) {
-      fs.unlinkSync(file.path);
-    }
+      // Upload to MinIO
+      const uploadResult = await MinioStorage.uploadBuffer({
+        bucketName,
+        objectName: finalObjectName,
+        fileBuffer,
+        contentType: file.mimetype || 'application/octet-stream',
+        metadata: {
+          'original-name': safeName,
+          source: 'multer',
+          ...metadata
+        }
+      });
 
-    const displayUrl = await MinioStorage.getPresignedObjectUrl(
-      uploadResult.bucket,
-      uploadResult.objectName
-    );
+      // Generate temporary access URL
+      const displayUrl = await MinioStorage.getPresignedObjectUrl(
+        uploadResult.bucket,
+        uploadResult.objectName
+      );
 
-    return {
-      ...(await this.createMedia({
-        id: `media-${Date.now()}`,
+      // Create Media Model
+      const media = this.createMedia({
+        id: `media-${crypto.randomUUID()}`,
         name: safeName,
-        originalname: file.originalname || safeName,
-        mimetype: file.mimetype || 'application/octet-stream',
-        size: file.size,
+        originalName: file.originalname || safeName,
+        mimeType: file.mimetype,
+        size: file.size ?? fileBuffer.length,
         path: uploadResult.objectName,
         url: displayUrl,
         bucket: uploadResult.bucket,
-        folder,
+        folder: cleanFolder,
+        uploadedBy,
         createdAt: new Date().toISOString()
-      })),
-      objectName: uploadResult.objectName,
-      bucket: uploadResult.bucket,
-      url: displayUrl
-    };
+      });
+
+      return {
+        ...media.toJSON(),
+        objectName: uploadResult.objectName
+      };
+
+    } finally {
+      // Remove temporary local file
+      if (file.path) {
+        await fs.promises.unlink(file.path).catch((error) => {
+          if (error.code !== 'ENOENT') {
+            throw error;
+          }
+        });
+      }
+    }
   }
+
+  // ========================================
+  // 4. UPLOAD MULTIPLE FILES
+  // ========================================
 
   async uploadMultiple(files = [], options = {}) {
-    const result = [];
-
-    for (const file of files) {
-      result.push(await this.uploadSingle(file, options));
+    console.log('FILES:', files.length);
+    console.log('FILE NAMES:', files.map(file => file.originalname));
+    if (!Array.isArray(files) || files.length === 0) {
+      throw new Error('At least one file is required');
     }
 
-    return result;
+    const results = [];
+
+    for (const file of files) {
+      results.push(await this.uploadSingle(file, options));
+    }
+
+    return results;
   }
 
-  async listMedia(bucketName = MinioStorage.constants.DEFAULT_BUCKET, prefix = 'uploads/') {
-    const objects = await MinioStorage.listObjects(bucketName, prefix);
+  // ========================================
+  // 5. FORMAT OBJECT TO MEDIA
+  // ========================================
 
-    return Promise.all(objects.map(async (obj) => ({
-      id: obj.name,
-      name: path.basename(obj.name),
-      originalName: path.basename(obj.name),
+  async formatMedia(object, prefix = 'uploads/') {
+    const presignedUrl = await MinioStorage.getPresignedObjectUrl(
+      object.bucket,
+      object.name
+    );
+
+    return this.createMedia({
+      id: object.name,
+      name: path.basename(object.name),
+      originalName: path.basename(object.name),
       mimeType: 'application/octet-stream',
-      size: obj.size || 0,
-      path: obj.name,
-      url: await MinioStorage.getPresignedObjectUrl(obj.bucket, obj.name),
-      bucket: obj.bucket,
-      folder: prefix || 'uploads',
-      createdAt: new Date().toISOString()
-    })));
+      size: object.size,
+      path: object.name,
+      url: presignedUrl,
+      bucket: object.bucket,
+      folder: path.posix.dirname(object.name),
+      createdAt: object.lastModified
+        ? new Date(object.lastModified).toISOString()
+        : undefined
+    }).toJSON();
   }
 
-  async getMediaById(id, bucketName = MinioStorage.constants.DEFAULT_BUCKET, prefix = 'uploads/') {
-    const objects = await MinioStorage.listObjects(bucketName, prefix);
-    const item = objects.find((obj) => String(obj.name) === String(id));
+  // ========================================
+  // 6. LIST MEDIA
+  // ========================================
 
-    if (!item) return null;
+  async listMedia(
+    bucketName = MinioStorage.constants.DEFAULT_BUCKET,
+    prefix = 'uploads/'
+  ) {
+    const objects = await MinioStorage.listObjects(
+      bucketName,
+      prefix
+    );
 
-    return {
-      id: item.name,
-      name: path.basename(item.name),
-      originalName: path.basename(item.name),
-      mimeType: 'application/octet-stream',
-      size: item.size || 0,
-      path: item.name,
-      url: await MinioStorage.getPresignedObjectUrl(item.bucket, item.name),
-      bucket: item.bucket,
-      folder: prefix || 'uploads',
-      createdAt: new Date().toISOString()
-    };
+    return Promise.all(
+      objects.map((object) => this.formatMedia(object, prefix))
+    );
   }
 
-  async deleteMedia(id, bucketName = MinioStorage.constants.DEFAULT_BUCKET) {
+  // ========================================
+  // 7. GET MEDIA BY ID
+  // ========================================
+
+  async getMediaById(
+    id,
+    bucketName = MinioStorage.constants.DEFAULT_BUCKET,
+    prefix = 'uploads/'
+  ) {
+    if (!id) return null;
+
+    const objects = await MinioStorage.listObjects(
+      bucketName,
+      prefix
+    );
+
+    const object = objects.find(
+      (item) => String(item.name) === String(id)
+    );
+
+    if (!object) return null;
+
+    return this.formatMedia(object, prefix);
+  }
+
+  // ========================================
+  // 8. DELETE MEDIA
+  // ========================================
+
+  async deleteMedia(
+    id,
+    bucketName = MinioStorage.constants.DEFAULT_BUCKET
+  ) {
     if (!id) return false;
+
+    // Check object existence
+    const result = await MinioStorage.getClient().headObject({
+      Bucket: bucketName,
+      Key: id
+    }).promise().catch((error) => {
+      if (
+        error.code === 'NotFound' ||
+        error.code === 'NoSuchKey' ||
+        error.statusCode === 404
+      ) {
+        return null;
+      }
+
+      throw error;
+    });
+
+    if (!result) return false;
+
     await MinioStorage.removeObject(bucketName, id);
+
     return true;
   }
 }
+
+// ========================================
+// 9. EXPORT
+// ========================================
 
 module.exports = new MediaServices();
 module.exports.MediaServices = MediaServices;
