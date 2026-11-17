@@ -310,6 +310,11 @@ const swaggerDocs = {
                   file: {
                     type: 'string',
                     format: 'binary'
+                  },
+                  objectName: {
+                    type: 'string',
+                    description: 'Optional storage key to use for the uploaded file.',
+                    example: 'uploads/image.jpg'
                   }
                 },
                 required: ['file']
@@ -355,6 +360,11 @@ const swaggerDocs = {
                   files: {
                     type: 'array',
                     items: { type: 'string', format: 'binary' }
+                  },
+                  objectNames: {
+                    type: 'string',
+                    description: 'Optional JSON array of storage keys, in the same order as files.',
+                    example: '["uploads/image-1.jpg","uploads/image-2.jpg"]'
                   }
                 },
                 required: ['files']
@@ -378,6 +388,43 @@ const swaggerDocs = {
         }
       }
     },
+    '/media/uploads/{fileName}': {
+      parameters: [
+        { name: 'fileName', in: 'path', required: true, schema: { type: 'string' } },
+        { name: 'bucket', in: 'query', required: false, schema: { type: 'string' } }
+      ],
+      get: {
+        tags: ['Media'],
+        summary: 'Get an uploaded file',
+        description: 'Redirects to a temporary signed MinIO URL.',
+        responses: {
+          302: { description: 'Redirect to the signed file URL' },
+          404: {
+            description: 'Media not found',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' }
+              }
+            }
+          }
+        },
+        delete: {
+          tags: ['Media'],
+          summary: 'Delete an uploaded file',
+          responses: {
+            200: {
+              description: 'File deleted successfully',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/SuccessResponse' }
+                }
+              }
+            },
+            404: { description: 'Media not found' }
+          }
+        }
+      }
+    },
     '/media': {
       get: {
         tags: ['Media'],
@@ -392,6 +439,264 @@ const swaggerDocs = {
             content: {
               'application/json': {
                 schema: { $ref: '#/components/schemas/SuccessResponse' }
+              }
+            }
+          }
+        }
+      },
+      delete: {
+        tags: ['Media'],
+        summary: 'Delete one or more uploaded files',
+        parameters: [
+          { name: 'bucket', in: 'query', required: false, schema: { type: 'string' } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['objectNames'],
+                properties: {
+                  objectNames: {
+                    type: 'array',
+                    minItems: 1,
+                    items: { type: 'string' },
+                    example: ['uploads/1794876452116-ti-xung.jpg']
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'Per-file deletion results',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SuccessResponse' }
+              }
+            }
+          },
+          400: {
+            description: 'Invalid objectNames',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/media/object': {
+      post: {
+        tags: ['Media'],
+        summary: 'Upload files using specified object names (singular alias)',
+        description: 'Alias for POST /media/objects. Upload files using matching objectNames.',
+        parameters: [
+          { name: 'bucket', in: 'query', required: false, schema: { type: 'string' } },
+          {
+            name: 'objectNames',
+            in: 'query',
+            required: false,
+            style: 'form',
+            explode: true,
+            schema: { type: 'array', items: { type: 'string' } }
+          },
+          { name: 'id', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'prefix', in: 'query', required: false, schema: { type: 'string' } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['files'],
+                properties: {
+                  files: {
+                    type: 'array',
+                    minItems: 1,
+                    maxItems: 5,
+                    items: { type: 'string', format: 'binary' }
+                  },
+                  objectNames: {
+                    type: 'string',
+                    description: 'Optional JSON array of object keys, in the same order as files.'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          201: {
+            description: 'Files uploaded using the specified object names',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SuccessResponse' }
+              }
+            }
+          },
+          400: {
+            description: 'Missing or invalid objectNames',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/media/objects': {
+      delete: {
+        tags: ['Media'],
+        summary: 'Delete media by object names',
+        parameters: [
+          {
+            name: 'objectNames',
+            in: 'query',
+            required: false,
+            style: 'form',
+            explode: true,
+            schema: { type: 'array', minItems: 1, items: { type: 'string' } },
+            example: ['uploads/image-1.jpg', 'uploads/image-2.jpg']
+          },
+          { name: 'id', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'prefix', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'bucket', in: 'query', required: false, schema: { type: 'string' } }
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  objectNames: {
+                    type: 'array',
+                    minItems: 1,
+                    items: { type: 'string' }
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: 'Per-object deletion results',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SuccessResponse' }
+              }
+            }
+          },
+          400: {
+            description: 'Invalid or missing objectNames',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' }
+              }
+            }
+          }
+        }
+      },
+      post: {
+        tags: ['Media'],
+        summary: 'Upload files using specified object names',
+        description: 'Provide objectNames as a multipart JSON array or query parameters. For a single file, id and prefix query parameters are also accepted.',
+        parameters: [
+          { name: 'bucket', in: 'query', required: false, schema: { type: 'string' } },
+          {
+            name: 'objectNames',
+            in: 'query',
+            required: false,
+            style: 'form',
+            explode: true,
+            schema: { type: 'array', items: { type: 'string' } }
+          },
+          { name: 'id', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'prefix', in: 'query', required: false, schema: { type: 'string' } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['files'],
+                properties: {
+                  files: {
+                    type: 'array',
+                    minItems: 1,
+                    maxItems: 5,
+                    items: { type: 'string', format: 'binary' }
+                  },
+                  objectNames: {
+                    type: 'string',
+                    description: 'Optional JSON array of object keys, in the same order as files.',
+                    example: '["uploads/image-1.jpg","uploads/image-2.jpg"]'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          201: {
+            description: 'Files uploaded using the specified object names',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SuccessResponse' }
+              }
+            }
+          },
+          400: {
+            description: 'Missing or invalid objectNames',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' }
+              }
+            }
+          }
+        }
+      },
+      get: {
+        tags: ['Media'],
+        summary: 'Get media metadata and signed URLs by object names',
+        parameters: [
+          {
+            name: 'objectNames',
+            in: 'query',
+            required: true,
+            style: 'form',
+            explode: true,
+            schema: {
+              type: 'array',
+              minItems: 1,
+              items: { type: 'string' }
+            },
+            example: ['uploads/image-1.jpg', 'uploads/image-2.jpg']
+          },
+          { name: 'bucket', in: 'query', required: false, schema: { type: 'string' } }
+        ],
+        responses: {
+          200: {
+            description: 'Per-object metadata and signed URLs',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SuccessResponse' }
+              }
+            }
+          },
+          400: {
+            description: 'Invalid objectNames',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' }
               }
             }
           }

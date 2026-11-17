@@ -74,6 +74,8 @@ class Media {
 
       mimeType:
         extra.mimeType ||
+        file.mimeType ||
+        file.contentType ||
         file.mimetype ||
         'application/octet-stream',
 

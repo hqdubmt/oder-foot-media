@@ -8,6 +8,11 @@ const crypto = require('crypto');
 const MinioStorage = require('../../../configs/minio.config');
 const Media = require('../models/media.models');
 
+const isNotFoundError = (error) =>
+  error?.code === 'NotFound' ||
+  error?.code === 'NoSuchKey' ||
+  error?.statusCode === 404;
+
 class MediaServices {
 
   // ========================================
@@ -132,10 +137,18 @@ class MediaServices {
       throw new Error('At least one file is required');
     }
 
+    const { objectNames, ...uploadOptions } = options;
+    if (objectNames && objectNames.length !== files.length) {
+      throw new Error('objectNames count must match the uploaded files count');
+    }
+
     const results = [];
 
-    for (const file of files) {
-      results.push(await this.uploadSingle(file, options));
+    for (const [index, file] of files.entries()) {
+      results.push(await this.uploadSingle(file, {
+        ...uploadOptions,
+        objectName: objectNames?.[index] || uploadOptions.objectName
+      }));
     }
 
     return results;
@@ -155,7 +168,7 @@ class MediaServices {
       id: object.name,
       name: path.basename(object.name),
       originalName: path.basename(object.name),
-      mimeType: 'application/octet-stream',
+      mimeType: object.contentType || 'application/octet-stream',
       size: object.size,
       path: object.name,
       url: presignedUrl,
@@ -210,6 +223,64 @@ class MediaServices {
     return this.formatMedia(object, prefix);
   }
 
+  async getMediaByObjectNames(
+    objectNames,
+    bucketName = MinioStorage.constants.DEFAULT_BUCKET
+  ) {
+    const outcomes = await Promise.allSettled(
+      objectNames.map(async (objectName) => {
+        const head = await MinioStorage.getClient().headObject({
+          Bucket: bucketName,
+          Key: objectName
+        }).promise();
+
+        const media = await this.formatMedia({
+          name: objectName,
+          bucket: bucketName,
+          size: head.ContentLength,
+          lastModified: head.LastModified,
+          contentType: head.ContentType
+        });
+
+        return { objectName, status: 'found', media };
+      })
+    );
+
+    return outcomes.map((outcome, index) => {
+      const objectName = objectNames[index];
+
+      if (outcome.status === 'fulfilled') return outcome.value;
+      if (isNotFoundError(outcome.reason)) {
+        return { objectName, status: 'not_found' };
+      }
+
+      console.error(`[MEDIA] Failed to retrieve object "${objectName}":`, outcome.reason);
+      return { objectName, status: 'error' };
+    });
+  }
+
+  async getMediaDownloadUrl(
+    objectName,
+    bucketName = MinioStorage.constants.DEFAULT_BUCKET
+  ) {
+    if (!objectName) return null;
+
+    try {
+      await MinioStorage.getClient().headObject({
+        Bucket: bucketName,
+        Key: objectName
+      }).promise();
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return null;
+      }
+
+      throw error;
+    }
+
+    return MinioStorage.getPresignedObjectUrl(bucketName, objectName);
+  }
+
   // ========================================
   // 8. DELETE MEDIA
   // ========================================
@@ -225,11 +296,7 @@ class MediaServices {
       Bucket: bucketName,
       Key: id
     }).promise().catch((error) => {
-      if (
-        error.code === 'NotFound' ||
-        error.code === 'NoSuchKey' ||
-        error.statusCode === 404
-      ) {
+      if (isNotFoundError(error)) {
         return null;
       }
 
@@ -241,6 +308,29 @@ class MediaServices {
     await MinioStorage.removeObject(bucketName, id);
 
     return true;
+  }
+
+  async deleteMultipleMedia(
+    objectNames,
+    bucketName = MinioStorage.constants.DEFAULT_BUCKET
+  ) {
+    const outcomes = await Promise.allSettled(
+      objectNames.map((objectName) => this.deleteMedia(objectName, bucketName))
+    );
+
+    return outcomes.map((outcome, index) => {
+      const objectName = objectNames[index];
+
+      if (outcome.status === 'rejected') {
+        console.error(`[MEDIA] Failed to delete object "${objectName}":`, outcome.reason);
+        return { objectName, status: 'error' };
+      }
+
+      return {
+        objectName,
+        status: outcome.value ? 'deleted' : 'not_found'
+      };
+    });
   }
 }
 
