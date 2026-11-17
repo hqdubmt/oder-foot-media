@@ -39,6 +39,69 @@ const parseObjectNames = (value) => {
   return objectNames.map(validateObjectName);
 };
 
+const getSingleObjectName = (req) => {
+  const objectName = req.query.objectName ?? req.query.id;
+  if (objectName === undefined) {
+    throw new BadRequestError('objectName or id is required');
+  }
+
+  if (typeof objectName !== 'string') {
+    throw new BadRequestError('objectName must be a string');
+  }
+
+  if (objectName.includes('/')) return validateObjectName(objectName);
+
+  const prefix = req.query.prefix || 'uploads/';
+  if (typeof prefix !== 'string') {
+    throw new BadRequestError('prefix must be a string');
+  }
+
+  return validateObjectName(`${prefix.replace(/\/+$/, '')}/${objectName}`);
+};
+
+const getBulkObjectNames = (req) => {
+  const queryObjectNames = req.query.objectNames;
+  if (queryObjectNames !== undefined) {
+    const values = Array.isArray(queryObjectNames)
+      ? queryObjectNames
+      : [queryObjectNames];
+
+    if (
+      values.length === 1 &&
+      typeof values[0] === 'string' &&
+      values[0].startsWith('[')
+    ) {
+      return parseObjectNames(values[0]);
+    }
+
+    return values.map(validateObjectName);
+  }
+
+  if (req.query.id === undefined) {
+    throw new BadRequestError('objectNames or id is required');
+  }
+
+  const ids = Array.isArray(req.query.id) ? req.query.id : [req.query.id];
+  const prefixes = Array.isArray(req.query.prefix)
+    ? req.query.prefix
+    : [req.query.prefix];
+
+  return ids.map((id, index) => {
+    if (typeof id !== 'string') {
+      throw new BadRequestError('Each id must be a string');
+    }
+
+    if (id.includes('/')) return validateObjectName(id);
+
+    const prefix = prefixes[index] || prefixes[0] || 'uploads/';
+    if (typeof prefix !== 'string') {
+      throw new BadRequestError('Each prefix must be a string');
+    }
+
+    return validateObjectName(`${prefix.replace(/\/+$/, '')}/${id}`);
+  });
+};
+
 const getDeleteObjectNames = (req) => {
   const value = req.body?.objectNames ?? req.query.objectNames;
   if (value !== undefined) {
@@ -297,12 +360,7 @@ class MediaControllers {
 }
 
   async getByObjectNames(req, res) {
-  const queryObjectNames = req.query.objectNames;
-  const objectNames = (
-    Array.isArray(queryObjectNames)
-      ? queryObjectNames
-      : [queryObjectNames]
-  ).map(validateObjectName);
+  const objectNames = getBulkObjectNames(req);
   const bucketName = req.query.bucket || undefined;
   const results = await MediaServices.getMediaByObjectNames(
     objectNames,
@@ -321,6 +379,35 @@ class MediaControllers {
       }
     }
   }).send(res);
+  }
+
+  async getSingleByObjectName(req, res) {
+    const objectName = getSingleObjectName(req);
+    const bucketName = req.query.bucket || undefined;
+    const [result] = await MediaServices.getMediaByObjectNames(
+      [objectName],
+      bucketName
+    );
+
+    if (result.status === 'not_found') {
+      return new Ok({
+        status: 404,
+        code: 404000,
+        message: 'Media not found',
+        description: 'Không tìm thấy media với objectName tương ứng.',
+        metadata: null
+      }).send(res);
+    }
+
+    if (result.status === 'error') {
+      throw new Error(`Failed to retrieve media object "${objectName}"`);
+    }
+
+    return new Ok({
+      message: 'Media retrieved successfully',
+      description: 'Thông tin media và signed URL.',
+      metadata: { media: result.media }
+    }).send(res);
   }
 
   async delete(req, res) {

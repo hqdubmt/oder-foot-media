@@ -10,7 +10,12 @@ router.post('/uploads', uploadMultiple('files', 5), asyncHandler(MediaController
 router.get('/uploads/:fileName', asyncHandler(MediaControllers.getFile));
 router.delete('/uploads/:fileName', asyncHandler(MediaControllers.deleteFile));
 router.delete('/', asyncHandler(MediaControllers.deleteMultiple));
-
+router.get('/object', asyncHandler(MediaControllers.getSingleByObjectName));
+router.post(
+  '/object',
+  uploadMultiple('files', 5),
+  asyncHandler((req, res) => MediaControllers.uploadMultipleByObjectNames(req, res))
+);
 router.post(
   '/objects',
   uploadMultiple('files', 5),

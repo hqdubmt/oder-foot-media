@@ -490,6 +490,42 @@ const swaggerDocs = {
       }
     },
     '/media/object': {
+      get: {
+        tags: ['Media'],
+        summary: 'Get one media object by object name',
+        parameters: [
+          { name: 'objectName', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'id', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'prefix', in: 'query', required: false, schema: { type: 'string' } },
+          { name: 'bucket', in: 'query', required: false, schema: { type: 'string' } }
+        ],
+        responses: {
+          200: {
+            description: 'Media metadata and signed URL',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/SuccessResponse' }
+              }
+            }
+          },
+          400: {
+            description: 'Missing or invalid objectName',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' }
+              }
+            }
+          },
+          404: {
+            description: 'Media not found',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' }
+              }
+            }
+          }
+        }
+      },
       post: {
         tags: ['Media'],
         summary: 'Upload files using specified object names (singular alias)',
@@ -667,11 +703,12 @@ const swaggerDocs = {
       get: {
         tags: ['Media'],
         summary: 'Get media metadata and signed URLs by object names',
+        description: 'Pass objectNames repeatedly, as a JSON array, or pass repeated id values with optional prefixes.',
         parameters: [
           {
             name: 'objectNames',
             in: 'query',
-            required: true,
+            required: false,
             style: 'form',
             explode: true,
             schema: {
@@ -681,6 +718,8 @@ const swaggerDocs = {
             },
             example: ['uploads/image-1.jpg', 'uploads/image-2.jpg']
           },
+          { name: 'id', in: 'query', required: false, schema: { type: 'array', items: { type: 'string' } } },
+          { name: 'prefix', in: 'query', required: false, schema: { type: 'array', items: { type: 'string' } } },
           { name: 'bucket', in: 'query', required: false, schema: { type: 'string' } }
         ],
         responses: {
