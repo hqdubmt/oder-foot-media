@@ -62,3 +62,5 @@ curl -X DELETE "http://localhost:5002/api/v1/media/avatars%2F1700000000000-image
 ```
 
 This uses AWS SDK S3 operations, compatible with MinIO and AWS S3.
+
+Uploaded files are staged locally before they are transferred to MinIO. Set the `folder` query parameter to group files under `uploads/<folder>` locally and in MinIO; for example, `folder=qr` writes to `uploads/qr`, while `folder=a` and `folder=b` write to separate directories. The default is `uploads/`. Temporary local files are removed after the transfer.

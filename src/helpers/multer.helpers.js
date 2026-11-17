@@ -22,17 +22,37 @@ const DEFAULT_ALLOWED_MIME_TYPES = new Set([
 
 const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-const resolveUploadDir = (customDir = 'uploads') => {
+const resolveUploadDir = (customDir = 'uploads', folder = 'uploads') => {
   const uploadDir = path.resolve(process.cwd(), customDir);
-  fs.mkdirSync(uploadDir, { recursive: true });
-  return uploadDir;
+  if (typeof folder !== 'string') {
+    throw new Error('Upload folder must be a string');
+  }
+
+  const cleanFolder = folder.replace(/^\/+|\/+$/g, '');
+  const folderParts = cleanFolder && cleanFolder !== 'uploads'
+    ? cleanFolder.split('/')
+    : [];
+  if (
+    folder.includes('\\') ||
+    folderParts.some((part) => !part || part === '.' || part === '..')
+  ) {
+    throw new Error('Upload folder must be a valid relative path');
+  }
+
+  const targetDir = path.join(uploadDir, ...folderParts);
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  return targetDir;
 };
 
 const buildStorage = (customDir = 'uploads') =>
   multer.diskStorage({
     destination: (req, file, cb) => {
       try {
-        const targetDir = resolveUploadDir(customDir);
+        const targetDir = resolveUploadDir(
+          customDir,
+          req.query?.folder || 'uploads'
+        );
         cb(null, targetDir);
       } catch (error) {
         cb(error, null);
